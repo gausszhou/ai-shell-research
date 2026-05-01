@@ -17,7 +17,7 @@ class AIShell {
   detectShell() {
     const shell = process.env.SHELL || process.env.COMSPEC;
     if (shell) return shell;
-    
+
     if (process.platform === 'win32') {
       try {
         require('child_process').execSync('powershell.exe -Command "exit"', { stdio: 'ignore' });
@@ -30,9 +30,11 @@ class AIShell {
   }
 
   checkIsGitBash() {
-    return process.platform === 'win32' && 
-           this.currentShell.toLowerCase().includes('bash') &&
-           this.currentShell.toLowerCase().includes('git');
+    return (
+      process.platform === 'win32' &&
+      this.currentShell.toLowerCase().includes('bash') &&
+      this.currentShell.toLowerCase().includes('git')
+    );
   }
 
   // 路径转换（双向）
@@ -55,11 +57,11 @@ class AIShell {
   formatPathForDisplay(filePath) {
     let displayPath = this.isGitBash ? this.convertPath(filePath, true) : filePath;
     const homeDir = this.isGitBash ? this.convertPath(os.homedir(), true) : os.homedir();
-    
+
     if (displayPath.startsWith(homeDir)) {
       displayPath = '~' + displayPath.slice(homeDir.length);
     }
-    
+
     return displayPath;
   }
 
@@ -76,10 +78,10 @@ class AIShell {
 
     // 内置命令
     const builtins = {
-      'exit': () => this.exit(),
-      'quit': () => this.exit(),
-      'clear': () => console.clear(),
-      'cd': (cmd) => this.handleCd(cmd)
+      exit: () => this.exit(),
+      quit: () => this.exit(),
+      clear: () => console.clear(),
+      cd: (cmd) => this.handleCd(cmd),
     };
 
     for (const [name, handler] of Object.entries(builtins)) {
@@ -106,7 +108,7 @@ class AIShell {
     try {
       // 转换路径格式（如果是 Git Bash）
       let cdTarget = this.isGitBash ? this.convertPath(target, false) : target;
-      
+
       if (cdTarget.startsWith('~')) {
         newPath = path.join(os.homedir(), cdTarget.slice(1));
       } else if (path.isAbsolute(cdTarget)) {
@@ -131,7 +133,7 @@ class AIShell {
     return new Promise((resolve) => {
       const shellLower = this.currentShell.toLowerCase();
       let args;
-      
+
       if (shellLower.includes('powershell')) {
         args = ['-Command', command];
       } else if (shellLower.includes('cmd') || this.currentShell === 'cmd.exe') {
@@ -143,7 +145,7 @@ class AIShell {
       const child = spawn(this.currentShell, args, {
         cwd: this.currentDir,
         stdio: ['inherit', 'pipe', 'pipe'],
-        env: process.env
+        env: process.env,
       });
 
       child.stdout.on('data', (data) => process.stdout.write(data));
@@ -157,7 +159,6 @@ class AIShell {
   }
 
   start() {
-    console.clear();
     console.log('[AI SHELL] 已启动');
     console.log(`当前 shell: ${this.currentShell}\n`);
 
@@ -165,22 +166,21 @@ class AIShell {
       input: process.stdin,
       output: process.stdout,
       prompt: this.getPrompt(),
-      terminal: true
+      terminal: true,
     });
 
     this.rl.prompt();
 
     this.rl.on('line', async (line) => {
       await this.executeCommand(line);
-      this.currentDir = process.cwd();  // 同步工作目录
+      this.currentDir = process.cwd(); // 同步工作目录
       this.rl.setPrompt(this.getPrompt());
       this.rl.prompt();
     });
 
     this.rl.on('close', () => this.exit());
     this.rl.on('SIGINT', () => {
-      console.log('\n输入 exit 退出');
-      this.rl.prompt();
+      this.exit();
     });
   }
 }
