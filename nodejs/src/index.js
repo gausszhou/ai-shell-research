@@ -11,6 +11,7 @@ class AIShell {
     this.currentShell = this.detectShell();
     this.currentDir = process.cwd();
     this.rl = null;
+    this.isGitBash = this.checkIsGitBash();
   }
 
   detectShell() {
@@ -28,36 +29,108 @@ class AIShell {
     return '/bin/bash';
   }
 
+  checkIsGitBash() {
+    return process.platform === 'win32' && 
+           this.currentShell.toLowerCase().includes('bash') &&
+           this.currentShell.toLowerCase().includes('git');
+  }
+
+  // 路径转换（双向）
+  convertPath(inputPath, toUnix = true) {
+    if (!this.isGitBash) return inputPath;
+
+    if (toUnix) {
+      // Windows -> Unix: D:\Code -> /d/Code
+      let unixPath = inputPath.replace(/\\/g, '/');
+      const match = unixPath.match(/^([A-Za-z]):\/(.*)$/);
+      return match ? `/${match[1].toLowerCase()}/${match[2]}` : unixPath;
+    } else {
+      // Unix -> Windows: /d/Code -> D:\Code
+      const match = inputPath.match(/^\/([a-z])\/(.*)$/i);
+      return match ? `${match[1].toUpperCase()}:\\${match[2].replace(/\//g, '\\')}` : inputPath;
+    }
+  }
+
+  // 格式化路径用于显示（支持 ~ 缩写）
+  formatPathForDisplay(filePath) {
+    let displayPath = this.isGitBash ? this.convertPath(filePath, true) : filePath;
+    const homeDir = this.isGitBash ? this.convertPath(os.homedir(), true) : os.homedir();
+    
+    if (displayPath.startsWith(homeDir)) {
+      displayPath = '~' + displayPath.slice(homeDir.length);
+    }
+    
+    return displayPath;
+  }
+
   getPrompt() {
     const username = os.userInfo().username;
     const hostname = os.hostname().split('.')[0];
-    return `[AI SHELL] ${username}@${hostname}:${this.currentDir}$ `;
+    const displayDir = this.formatPathForDisplay(this.currentDir);
+    return `[AI SHELL] ${username}@${hostname}:${displayDir}$ `;
   }
 
-  executeCommand(command) {
-    if (!command || command.trim() === '') {
-      return Promise.resolve();
+  async executeCommand(command) {
+    const trimmed = command.trim();
+    if (!trimmed) return;
+
+    // 内置命令
+    const builtins = {
+      'exit': () => this.exit(),
+      'quit': () => this.exit(),
+      'clear': () => console.clear(),
+      'cd': (cmd) => this.handleCd(cmd)
+    };
+
+    for (const [name, handler] of Object.entries(builtins)) {
+      if (trimmed === name || trimmed.startsWith(`${name} `)) {
+        await handler(trimmed);
+        return;
+      }
     }
 
-    // 仅实现必要的内置命令
-    if (command.trim() === 'exit' || command.trim() === 'quit') {
-      console.log('再见！');
-      process.exit(0);
-    }
+    // 外部命令
+    await this.runExternalCommand(trimmed);
+  }
 
-    if (command.trim() === 'clear') {
-      console.clear();
-      return Promise.resolve();
-    }
+  exit() {
+    console.log('再见！');
+    process.exit(0);
+  }
 
-    if (command.trim().startsWith('cd ')) {
-      return this.handleCd(command);
-    }
+  handleCd(command) {
+    const target = command.slice(3).trim();
+    if (!target) return;
 
-    // 根据 shell 类型选择参数
+    let newPath;
+    try {
+      // 转换路径格式（如果是 Git Bash）
+      let cdTarget = this.isGitBash ? this.convertPath(target, false) : target;
+      
+      if (cdTarget.startsWith('~')) {
+        newPath = path.join(os.homedir(), cdTarget.slice(1));
+      } else if (path.isAbsolute(cdTarget)) {
+        newPath = cdTarget;
+      } else {
+        newPath = path.resolve(this.currentDir, cdTarget);
+      }
+
+      if (fs.existsSync(newPath) && fs.statSync(newPath).isDirectory()) {
+        this.currentDir = newPath;
+        process.chdir(newPath);
+        this.rl?.setPrompt(this.getPrompt());
+      } else {
+        console.error(`cd: ${target}: 没有那个文件或目录`);
+      }
+    } catch (error) {
+      console.error(`cd: ${error.message}`);
+    }
+  }
+
+  runExternalCommand(command) {
     return new Promise((resolve) => {
-      let args;
       const shellLower = this.currentShell.toLowerCase();
+      let args;
       
       if (shellLower.includes('powershell')) {
         args = ['-Command', command];
@@ -83,35 +156,6 @@ class AIShell {
     });
   }
 
-  handleCd(command) {
-    const target = command.trim().substring(3).trim();
-    let newPath;
-
-    try {
-      if (target.startsWith('~')) {
-        newPath = path.join(os.homedir(), target.slice(1));
-      } else if (path.isAbsolute(target)) {
-        newPath = target;
-      } else {
-        newPath = path.resolve(this.currentDir, target);
-      }
-
-      if (fs.existsSync(newPath) && fs.statSync(newPath).isDirectory()) {
-        this.currentDir = newPath;
-        process.chdir(newPath);
-        // 更新提示符
-        if (this.rl) {
-          this.rl.setPrompt(this.getPrompt());
-        }
-      } else {
-        console.error(`cd: ${target}: 没有那个文件或目录`);
-      }
-    } catch (error) {
-      console.error(`cd: ${error.message}`);
-    }
-    return Promise.resolve();
-  }
-
   start() {
     console.clear();
     console.log('[AI SHELL] 已启动');
@@ -128,18 +172,12 @@ class AIShell {
 
     this.rl.on('line', async (line) => {
       await this.executeCommand(line);
-      // 命令执行后同步工作目录
-      this.currentDir = process.cwd();
+      this.currentDir = process.cwd();  // 同步工作目录
       this.rl.setPrompt(this.getPrompt());
       this.rl.prompt();
     });
 
-    this.rl.on('close', () => {
-      console.log('\n再见！');
-      process.exit(0);
-    });
-
-    // 处理 Ctrl+C
+    this.rl.on('close', () => this.exit());
     this.rl.on('SIGINT', () => {
       console.log('\n输入 exit 退出');
       this.rl.prompt();
@@ -148,4 +186,4 @@ class AIShell {
 }
 
 const aiShell = new AIShell();
-aiShell.start()
+aiShell.start();
