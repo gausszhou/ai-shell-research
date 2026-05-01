@@ -96,7 +96,6 @@ class AIShell {
   }
 
   exit() {
-    console.log('再见！');
     process.exit(0);
   }
 
